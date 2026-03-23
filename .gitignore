@@ -1,0 +1,27 @@
+# Virtual environment
+venv/
+.env
+
+# CatVTON cloned repo — teammates clone this themselves
+Try-on/CatVTON/
+
+# Model weights — too large for GitHub
+Try-on/tryon/weights/
+
+# Output images
+Try-on/tryon/output/
+
+# Test images
+Try-on/tryon/test/
+
+# Python cache
+**/__pycache__/
+*.pyc
+*.pyo
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
