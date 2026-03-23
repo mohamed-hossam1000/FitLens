@@ -2,10 +2,8 @@
 venv/
 .env
 
-# CatVTON cloned repo — teammates clone this themselves
 Try-on/CatVTON/
 
-# Model weights — too large for GitHub
 Try-on/tryon/weights/
 
 # Output images
