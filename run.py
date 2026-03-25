@@ -6,6 +6,7 @@ from PIL import Image, ImageFilter
 
 from modules.CatVTON.pipeline import CatVTONPipeline
 from modules.CatVTON.utils import resize_and_crop, resize_and_padding
+from diffusers.image_processor import VaeImageProcessor
 
 # Path setup — works on any machine, no hardcoding
 _catvton_root = "/teamspace/studios/this_studio/FitLens"                       # Try-on/CatVTON/
@@ -31,17 +32,25 @@ pipe = CatVTONPipeline(
     skip_safety_check = True,
 )
 
+mask_processor = VaeImageProcessor(
+        vae_scale_factor = 8,
+        do_normalize     = False,
+        do_binarize      = True,
+        do_convert_grayscale = True
+    )
 
 print(f"CatVTON loaded on {DEVICE}")
 
 person_image  = Image.open("test/person.jpg").convert("RGB")
-garment_image = Image.open("test/garment.jpg").convert("RGB")
+garment_image = Image.open("test/garment2.jpg").convert("RGB")
 mask          = Image.open("test/mask.png").convert("L")
 
 # Resize — same as their app.py
 person_image  = resize_and_crop(person_image,     (WIDTH, HEIGHT))
 mask  = resize_and_crop(mask,     (WIDTH, HEIGHT))
 garment_image = resize_and_padding(garment_image, (WIDTH, HEIGHT))
+
+mask = mask_processor.blur(mask, blur_factor=9)
 
 # Run inference
 generator = torch.Generator(device=DEVICE).manual_seed(555)
