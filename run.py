@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 from modules.CatVTON.pipeline import CatVTONPipeline
-from modules.utils import resize_and_crop, resize_and_padding
+from modules.CatVTON.utils import resize_and_crop, resize_and_padding
 
 # Path setup — works on any machine, no hardcoding
 _catvton_root = "/teamspace/studios/this_studio/FitLens"                       # Try-on/CatVTON/
@@ -44,14 +44,14 @@ mask  = resize_and_crop(mask,     (WIDTH, HEIGHT))
 garment_image = resize_and_padding(garment_image, (WIDTH, HEIGHT))
 
 # Run inference
-generator = torch.Generator(device=DEVICE).manual_seed(42)
+generator = torch.Generator(device=DEVICE).manual_seed(555)
 
 result_image = pipe(
     image               = person_image,
     condition_image     = garment_image,
     mask                = mask,
     num_inference_steps = 50,
-    guidance_scale      = 3.5,
+    guidance_scale      = 2.5,
     generator           = generator,
 )[0]
 

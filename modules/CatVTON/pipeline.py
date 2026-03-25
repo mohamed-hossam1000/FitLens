@@ -15,9 +15,7 @@ from huggingface_hub import snapshot_download
 from transformers import CLIPImageProcessor
 
 from modules.CatVTON.attn_processor import SkipAttnProcessor
-from modules.CatVTON.utils import get_trainable_module, init_adapter
-from modules.utils import (compute_vae_encodings, numpy_to_pil, prepare_image,
-                   prepare_mask_image, resize_and_crop, resize_and_padding)
+from modules.CatVTON.utils import *
 
 
 class CatVTONPipeline:
