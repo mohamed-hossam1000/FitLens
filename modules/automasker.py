@@ -1,7 +1,6 @@
 import numpy as np
-from pose_module import PoseModule
-from sam2_module import SAM2Module
-
+from modules.pose_module import PoseModule
+from modules.sam2_module import SAM2Module
 
 class AutoMasker:
     POSITIVE_REGIONS = {
@@ -54,7 +53,7 @@ if __name__ == "__main__":
     auto_masker = AutoMasker(sam_module, pose_module)
 
     # Load image
-    image = Image.open("test/person.png")
+    image = Image.open("test/person.jpg")
     image_np = np.array(image)
 
     def draw_mask_overlay(image, mask):
@@ -68,6 +67,7 @@ if __name__ == "__main__":
     # Segment upper body
     mask = auto_masker.segment_region(image_np, "upper")
     draw_mask_overlay(image_np, mask)
+    Image.fromarray(mask).save("mask.jpg")
     # Segment lower body
     mask = auto_masker.segment_region(image_np, "lower")
     draw_mask_overlay(image_np, mask)
