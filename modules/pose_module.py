@@ -63,17 +63,6 @@ class PoseModule:
             if pose_landmarks[i].visibility >= min_confidence
             and pose_landmarks[i].presence >= min_confidence
         ]
-    
-    def get_region_landmarks(self, pose_landmarks, region, min_confidence=0.5):
-        """Return normalized (x, y) coordinates for a clothing region: 'upper', 'lower', or 'shoes'."""
-
-        regions = {
-            "upper": [self.LEFT_SHOULDER, self.RIGHT_SHOULDER, self.LEFT_ELBOW, self.RIGHT_ELBOW, self.LEFT_HIP, self.RIGHT_HIP],
-            "lower": [self.LEFT_HIP, self.RIGHT_HIP, self.LEFT_KNEE, self.RIGHT_KNEE, self.LEFT_ANKLE, self.RIGHT_ANKLE],
-            "shoes": [self.LEFT_ANKLE, self.RIGHT_ANKLE, self.LEFT_HEEL, self.RIGHT_HEEL, self.LEFT_FOOT_INDEX, self.RIGHT_FOOT_INDEX],
-        }
-        return self.get_landmark_coordinates(pose_landmarks, regions[region], min_confidence)
-    
 
 if __name__ == "__main__":
     
