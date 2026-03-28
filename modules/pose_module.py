@@ -96,7 +96,7 @@ if __name__ == "__main__":
     model_path = "weights/pose_landmarker.task"
     pose_module = PoseModule(model_path)
 
-    image = Image.open("weights/person.png")
+    image = Image.open("test/person.png")
     image = np.array(image)
     pose_landmarks = pose_module.detect_pose(image)
     # convert normalized coords to pixel coords

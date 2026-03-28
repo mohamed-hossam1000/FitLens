@@ -54,7 +54,7 @@ if __name__ == "__main__":
     checkpoint = "weights/sam2.1_hiera_large.pt"
     sam_module = SAM2Module(model_cfg, checkpoint)
 
-    image = Image.open("weights/person.png")
+    image = Image.open("test/person.png")
     image_np = np.array(image)
     sam_module.set_image(image_np)
 
