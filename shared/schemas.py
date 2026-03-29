@@ -3,6 +3,8 @@ import numpy as np
 from typing import Optional, Literal
 
 class PipelinePayload(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
+
     person_image: np.ndarray          # Original person photo (RGB)
     garment_image: np.ndarray         # Flat-lay garment photo (RGB)
     garment_type: Literal["upper", "lower", "shoes"]      # "upper" or "lower" or shoes
