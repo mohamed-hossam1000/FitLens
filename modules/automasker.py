@@ -7,12 +7,15 @@ class AutoMasker:
             "upper": [PoseModule.LEFT_SHOULDER, PoseModule.RIGHT_SHOULDER, PoseModule.LEFT_ELBOW, PoseModule.RIGHT_ELBOW, PoseModule.LEFT_HIP, PoseModule.RIGHT_HIP],
             "lower": [PoseModule.LEFT_HIP, PoseModule.RIGHT_HIP, PoseModule.LEFT_KNEE, PoseModule.RIGHT_KNEE, PoseModule.LEFT_ANKLE, PoseModule.RIGHT_ANKLE],
             "shoes": [PoseModule.LEFT_ANKLE, PoseModule.RIGHT_ANKLE, PoseModule.LEFT_HEEL, PoseModule.RIGHT_HEEL, PoseModule.LEFT_FOOT_INDEX, PoseModule.RIGHT_FOOT_INDEX],
+            "overall": [PoseModule.LEFT_SHOULDER, PoseModule.RIGHT_SHOULDER, PoseModule.LEFT_ELBOW, PoseModule.RIGHT_ELBOW, PoseModule.LEFT_WRIST, PoseModule.RIGHT_WRIST,
+                        PoseModule.LEFT_HIP, PoseModule.RIGHT_HIP, PoseModule.LEFT_KNEE, PoseModule.RIGHT_KNEE, PoseModule.LEFT_ANKLE, PoseModule.RIGHT_ANKLE]
         }
     NEGATIVE_REGIONS = {
         "upper": [PoseModule.NOSE, PoseModule.LEFT_WRIST, PoseModule.RIGHT_WRIST, PoseModule.LEFT_KNEE, PoseModule.RIGHT_KNEE],
         "lower": [PoseModule.NOSE, PoseModule.LEFT_SHOULDER, PoseModule.RIGHT_SHOULDER, PoseModule.LEFT_WRIST, PoseModule.RIGHT_WRIST,
                    PoseModule.LEFT_HEEL, PoseModule.RIGHT_HEEL, PoseModule.LEFT_FOOT_INDEX, PoseModule.RIGHT_FOOT_INDEX],
-        "shoes": [PoseModule.LEFT_KNEE, PoseModule.RIGHT_KNEE, PoseModule.LEFT_HIP, PoseModule.RIGHT_HIP]
+        "shoes": [PoseModule.LEFT_KNEE, PoseModule.RIGHT_KNEE, PoseModule.LEFT_HIP, PoseModule.RIGHT_HIP],
+        "overall": [PoseModule.NOSE, PoseModule.LEFT_HEEL, PoseModule.RIGHT_HEEL, PoseModule.LEFT_FOOT_INDEX, PoseModule.RIGHT_FOOT_INDEX]
     }
 
     def __init__(self, sam2: SAM2Module, pose: PoseModule):
