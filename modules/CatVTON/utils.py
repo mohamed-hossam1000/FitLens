@@ -1,64 +1,99 @@
-import torch
+import os
+
+import math
 import PIL
 import numpy as np
+import torch
 from PIL import Image
-from modules.CatVTON.attn_processor import AttnProcessor2_0, SkipAttnProcessor 
+from accelerate.state import AcceleratorState
+from packaging import version
+import accelerate
+from typing import List, Optional, Tuple, Set
+from diffusers import UNet2DConditionModel, SchedulerMixin
+from tqdm import tqdm
 
 
-def init_adapter(unet, 
-                 cross_attn_cls=SkipAttnProcessor,
-                 self_attn_cls=None,
-                 cross_attn_dim=None, 
-                 **kwargs):
-    if cross_attn_dim is None:
-        cross_attn_dim = unet.config.cross_attention_dim
-    attn_procs = {}
-    for name in unet.attn_processors.keys():
-        cross_attention_dim = None if name.endswith("attn1.processor") else cross_attn_dim
-        if name.startswith("mid_block"):
-            hidden_size = unet.config.block_out_channels[-1]
-        elif name.startswith("up_blocks"):
-            block_id = int(name[len("up_blocks.")])
-            hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-        elif name.startswith("down_blocks"):
-            block_id = int(name[len("down_blocks.")])
-            hidden_size = unet.config.block_out_channels[block_id]
-        if cross_attention_dim is None:
-            if self_attn_cls is not None:
-                attn_procs[name] = self_attn_cls(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, **kwargs)
-            else:
-                # retain the original attn processor
-                attn_procs[name] = AttnProcessor2_0(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, **kwargs)
-        else:
-            attn_procs[name] = cross_attn_cls(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, **kwargs)
-                                                    
-    unet.set_attn_processor(attn_procs)
-    adapter_modules = torch.nn.ModuleList(unet.attn_processors.values())
-    return adapter_modules
+# Compute DREAM and update latents for diffusion sampling
+def compute_dream_and_update_latents_for_inpaint(
+    unet: UNet2DConditionModel,
+    noise_scheduler: SchedulerMixin,
+    timesteps: torch.Tensor,
+    noise: torch.Tensor,
+    noisy_latents: torch.Tensor,
+    target: torch.Tensor,
+    encoder_hidden_states: torch.Tensor,
+    dream_detail_preservation: float = 1.0,
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    """
+    Implements "DREAM (Diffusion Rectification and Estimation-Adaptive Models)" from http://arxiv.org/abs/2312.00210.
+    DREAM helps align training with sampling to help training be more efficient and accurate at the cost of an extra
+    forward step without gradients.
 
+    Args:
+        `unet`: The state unet to use to make a prediction.
+        `noise_scheduler`: The noise scheduler used to add noise for the given timestep.
+        `timesteps`: The timesteps for the noise_scheduler to user.
+        `noise`: A tensor of noise in the shape of noisy_latents.
+        `noisy_latents`: Previously noise latents from the training loop.
+        `target`: The ground-truth tensor to predict after eps is removed.
+        `encoder_hidden_states`: Text embeddings from the text model.
+        `dream_detail_preservation`: A float value that indicates detail preservation level.
+          See reference.
 
-def get_trainable_module(unet, trainable_module_name):
-    if trainable_module_name == "unet":
-        return unet
-    elif trainable_module_name == "transformer":
-        trainable_modules = torch.nn.ModuleList()
-        for blocks in [unet.down_blocks, unet.mid_block, unet.up_blocks]:
-            if hasattr(blocks, "attentions"):
-                trainable_modules.append(blocks.attentions)
-            else:
-                for block in blocks:
-                    if hasattr(block, "attentions"):
-                        trainable_modules.append(block.attentions)
-        return trainable_modules
-    elif trainable_module_name == "attention":
-        attn_blocks = torch.nn.ModuleList()
-        for name, param in unet.named_modules():
-            if "attn1" in name:
-                attn_blocks.append(param)
-        return attn_blocks
+    Returns:
+        `tuple[torch.Tensor, torch.Tensor]`: Adjusted noisy_latents and target.
+    """
+    alphas_cumprod = noise_scheduler.alphas_cumprod.to(timesteps.device)[timesteps, None, None, None]
+    sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
+
+    # The paper uses lambda = sqrt(1 - alpha) ** p, with p = 1 in their experiments.
+    dream_lambda = sqrt_one_minus_alphas_cumprod**dream_detail_preservation
+
+    pred = None  # b, 4, h, w
+    with torch.no_grad():
+        pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+
+    noisy_latents_no_condition = noisy_latents[:, :4]
+    _noisy_latents, _target = (None, None)
+    if noise_scheduler.config.prediction_type == "epsilon":
+        predicted_noise = pred
+        delta_noise = (noise - predicted_noise).detach()
+        delta_noise.mul_(dream_lambda)
+        _noisy_latents = noisy_latents_no_condition.add(sqrt_one_minus_alphas_cumprod * delta_noise)
+        _target = target.add(delta_noise)
+    elif noise_scheduler.config.prediction_type == "v_prediction":
+        raise NotImplementedError("DREAM has not been implemented for v-prediction")
     else:
-        raise ValueError(f"Unknown trainable_module_name: {trainable_module_name}")
+        raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+    
+    _noisy_latents = torch.cat([_noisy_latents, noisy_latents[:, 4:]], dim=1)
+    return _noisy_latents, _target
 
+# Prepare the input for inpainting model.
+def prepare_inpainting_input(
+    noisy_latents: torch.Tensor, 
+    mask_latents: torch.Tensor,
+    condition_latents: torch.Tensor,
+    enable_condition_noise: bool = True,
+    condition_concat_dim: int = -1,
+) -> torch.Tensor:
+    """
+    Prepare the input for inpainting model.
+    
+    Args:
+        noisy_latents (torch.Tensor): Noisy latents.
+        mask_latents (torch.Tensor): Mask latents.
+        condition_latents (torch.Tensor): Condition latents.
+        enable_condition_noise (bool): Enable condition noise.
+    
+    Returns:
+        torch.Tensor: Inpainting input.
+    """
+    if not enable_condition_noise:
+        condition_latents_ = condition_latents.chunk(2, dim=condition_concat_dim)[-1]
+        noisy_latents = torch.cat([noisy_latents, condition_latents_], dim=condition_concat_dim)
+    noisy_latents = torch.cat([noisy_latents, mask_latents, condition_latents], dim=1)
+    return noisy_latents
 
 # Compute VAE encodings
 def compute_vae_encodings(image: torch.Tensor, vae: torch.nn.Module) -> torch.Tensor:
@@ -78,6 +113,69 @@ def compute_vae_encodings(image: torch.Tensor, vae: torch.nn.Module) -> torch.Te
     return model_input
 
 
+# Init Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
+from accelerate.utils import ProjectConfiguration
+
+def init_accelerator(config):
+    accelerator_project_config = ProjectConfiguration(
+        project_dir=config.project_name,
+        logging_dir=os.path.join(config.project_name, "logs"),
+    )
+    accelerator_ddp_config = DistributedDataParallelKwargs(find_unused_parameters=True)
+    accelerator = Accelerator(
+        mixed_precision=config.mixed_precision,
+        log_with=config.report_to,
+        project_config=accelerator_project_config,
+        kwargs_handlers=[accelerator_ddp_config],
+        gradient_accumulation_steps=config.gradient_accumulation_steps,
+    )
+    # Disable AMP for MPS.
+    if torch.backends.mps.is_available():
+        accelerator.native_amp = False
+        
+    if accelerator.is_main_process:
+        accelerator.init_trackers(
+            project_name=config.project_name,
+            config={
+                "learning_rate": config.learning_rate,
+                "train_batch_size": config.train_batch_size,
+                "image_size": f"{config.width}x{config.height}",
+            },
+        )
+        
+    return accelerator
+
+
+def init_weight_dtype(wight_dtype):
+    return {
+        "no": torch.float32,
+        "fp16": torch.float16,
+        "bf16": torch.bfloat16,
+    }[wight_dtype]
+
+
+def init_add_item_id(config):
+    return torch.tensor(
+        [
+            config.height,
+            config.width * 2,
+            0,
+            0,
+            config.height,
+            config.width * 2,
+        ]
+    ).repeat(config.train_batch_size, 1)
+
+
+def repaint_result(result, person_image, mask_image):
+    result, person, mask = np.array(result), np.array(person_image), np.array(mask_image)
+    # expand the mask to 3 channels & to 0~1
+    mask = np.expand_dims(mask, axis=2)
+    mask = mask / 255.0
+    # mask for result, ~mask for person
+    result_ = result * mask + person * (1 - mask)
+    return Image.fromarray(result_.astype(np.uint8))
 
 
 def prepare_image(image):
@@ -153,6 +251,102 @@ def numpy_to_pil(images):
     return pil_images
 
 
+def tensor_to_image(tensor: torch.Tensor):
+    """
+    Converts a torch tensor to PIL Image.
+    """
+    assert tensor.dim() == 3, "Input tensor should be 3-dimensional."
+    assert tensor.dtype == torch.float32, "Input tensor should be float32."
+    assert (
+        tensor.min() >= 0 and tensor.max() <= 1
+    ), "Input tensor should be in range [0, 1]."
+    tensor = tensor.cpu()
+    tensor = tensor * 255
+    tensor = tensor.permute(1, 2, 0)
+    tensor = tensor.numpy().astype(np.uint8)
+    image = Image.fromarray(tensor)
+    return image
+
+
+def concat_images(images: List[Image.Image], divider: int = 4, cols: int = 4):
+    """
+    Concatenates images horizontally and with
+    """
+    widths = [image.size[0] for image in images]
+    heights = [image.size[1] for image in images]
+    total_width = cols * max(widths)
+    total_width += divider * (cols - 1)
+    # `col` images each row
+    rows = math.ceil(len(images) / cols)
+    total_height = max(heights) * rows
+    # add divider between rows
+    total_height += divider * (len(heights) // cols - 1)
+
+    # all black image
+    concat_image = Image.new("RGB", (total_width, total_height), (0, 0, 0))
+
+    x_offset = 0
+    y_offset = 0
+    for i, image in enumerate(images):
+        concat_image.paste(image, (x_offset, y_offset))
+        x_offset += image.size[0] + divider
+        if (i + 1) % cols == 0:
+            x_offset = 0
+            y_offset += image.size[1] + divider
+
+    return concat_image
+
+
+def read_prompt_file(prompt_file: str):
+    if prompt_file is not None and os.path.isfile(prompt_file):
+        with open(prompt_file, "r") as sample_prompt_file:
+            sample_prompts = sample_prompt_file.readlines()
+            sample_prompts = [sample_prompt.strip() for sample_prompt in sample_prompts]
+    else:
+        sample_prompts = []
+    return sample_prompts
+
+
+def save_tensors_to_npz(tensors: torch.Tensor, paths: List[str]):
+    assert len(tensors) == len(paths), "Length of tensors and paths should be the same!"
+    for tensor, path in zip(tensors, paths):
+        np.savez_compressed(path, latent=tensor.cpu().numpy())
+
+
+def deepspeed_zero_init_disabled_context_manager():
+    """
+    returns either a context list that includes one that will disable zero.Init or an empty context list
+    """
+    deepspeed_plugin = (
+        AcceleratorState().deepspeed_plugin
+        if accelerate.state.is_initialized()
+        else None
+    )
+    if deepspeed_plugin is None:
+        return []
+
+    return [deepspeed_plugin.zero3_init_context_manager(enable=False)]
+
+
+def is_xformers_available():
+    try:
+        import xformers
+
+        xformers_version = version.parse(xformers.__version__)
+        if xformers_version == version.parse("0.0.16"):
+            print(
+                "xFormers 0.0.16 cannot be used for training in some GPUs. If you observe problems during training, "
+                "please update xFormers to at least 0.0.17. "
+                "See https://huggingface.co/docs/diffusers/main/en/optimization/xformers for more details."
+            )
+        return True
+    except ImportError:
+        raise ValueError(
+            "xformers is not available. Make sure it is installed correctly"
+        )
+
+
+
 def resize_and_crop(image, size):
     # Crop to size ratio
     w, h = image.size
@@ -186,3 +380,20 @@ def resize_and_padding(image, size):
     padding = Image.new("RGB", size, (255, 255, 255))
     padding.paste(image, ((target_w - new_w) // 2, (target_h - new_h) // 2))
     return padding
+
+
+def scan_files_in_dir(directory, postfix: Set[str] = None, progress_bar: tqdm = None) -> list:
+    file_list = []
+    progress_bar = tqdm(total=0, desc=f"Scanning", ncols=100) if progress_bar is None else progress_bar
+    for entry in os.scandir(directory):
+        if entry.is_file():
+            if postfix is None or os.path.splitext(entry.path)[1] in postfix:
+                file_list.append(entry)
+                progress_bar.total += 1
+                progress_bar.update(1)
+        elif entry.is_dir():
+            file_list += scan_files_in_dir(entry.path, postfix=postfix, progress_bar=progress_bar)
+    return file_list
+
+if __name__ == "__main__":
+    ...

@@ -1,27 +1,37 @@
-"""
-pipeline/loader.py
-All heavy models are loaded lazily — only on first use.
-Import get_*() functions wherever you need a model instance.
-"""
-
+import os
+import sys
 import torch
+from diffusers.image_processor import VaeImageProcessor
+
 from config import (
     BASE_MODEL_PATH, ATTN_CKPT_PATH, ATTN_CKPT_VERSION,
-    DEVICE, SAM2_CFG, SAM2_WEIGHTS, POSE_WEIGHTS, WAN_MODEL_ID,
+    DEVICE, SAM2_CFG, SAM2_WEIGHTS, POSE_WEIGHTS,
+    WAN_MODEL_ID, CATVTON_ROOT,
 )
 
 _catvton_pipe   = None
 _mask_processor = None
 _generator      = None
-_auto_masker    = None
+_catvton_masker = None
 _wan_pipe       = None
 
 
+def _setup_catvton_path():
+    os.chdir(CATVTON_ROOT)
+    if CATVTON_ROOT not in sys.path:
+        sys.path.insert(0, CATVTON_ROOT)
+
+def _restore_project_path():
+    project_root = os.path.dirname(CATVTON_ROOT)
+    os.chdir(project_root)
+
 def get_catvton():
     global _catvton_pipe, _mask_processor, _generator
+    print("▶ get_catvton() called", flush=True)
     if _catvton_pipe is None:
-        from diffusers.image_processor import VaeImageProcessor
-        from modules.CatVTON.pipeline import CatVTONPipeline
+        _setup_catvton_path()
+
+        from model.pipeline import CatVTONPipeline
 
         print("⏳ Loading CatVTON pipeline...")
         _catvton_pipe = CatVTONPipeline(
@@ -45,36 +55,41 @@ def get_catvton():
     return _catvton_pipe, _mask_processor, _generator
 
 
-def get_auto_masker():
-    global _auto_masker
-    if _auto_masker is None:
-        from modules.sam2_module import SAM2Module
-        from modules.pose_module import PoseModule
-        from modules.automasker import AutoMasker
+def get_catvton_masker():
+    global _catvton_masker
 
-        print("⏳ Loading SAM2 + Pose + AutoMasker...")
-        sam_module   = SAM2Module(SAM2_CFG, SAM2_WEIGHTS)
-        pose_module  = PoseModule(POSE_WEIGHTS)
-        _auto_masker = AutoMasker(sam_module, pose_module)
-        print("✅ AutoMasker loaded.")
+    if _catvton_masker is None:
+        _setup_catvton_path()
 
-    return _auto_masker
+        from model.cloth_masker import AutoMasker
+
+        print("⏳ Loading CatVTON AutoMasker...")
+        _catvton_masker = AutoMasker(
+            densepose_ckpt = os.path.join(ATTN_CKPT_PATH, "DensePose"),
+            schp_ckpt      = os.path.join(ATTN_CKPT_PATH, "SCHP"),
+            device         = DEVICE,
+        )
+        print("✅ CatVTON AutoMasker loaded.")
+
+    return _catvton_masker
 
 
 def get_sam2():
-    """Returns the SAM2Module directly — used for garment extraction scenario."""
-    return get_auto_masker().sam2
+    """SAM2 — used only for GarmentSegmentor in extract scenario."""
+    from modules.sam2_module import SAM2Module
+    return SAM2Module(SAM2_CFG, SAM2_WEIGHTS)
 
 
 def get_wan():
     global _wan_pipe
+
     if _wan_pipe is None:
         from diffusers import WanImageToVideoPipeline
 
         print("⏳ Loading Wan2.1 I2V pipeline...")
         _wan_pipe = WanImageToVideoPipeline.from_pretrained(
             WAN_MODEL_ID,
-            torch_dtype      = torch.bfloat16,
+            torch_dtype       = torch.bfloat16,
             low_cpu_mem_usage = True,
         )
         _wan_pipe = _wan_pipe.to("cuda")
